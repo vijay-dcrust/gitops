@@ -1,0 +1,9 @@
+apiVersion: aws.gitops.com/v1alpha1
+kind: Gitagent
+metadata:
+  name: gitagent-sample
+spec:
+  # Add fields here
+  aws-service: "lb"
+  tags: 
+    kubernetes.io/service-name: "istio-system/istio-ingressgateway"

@@ -1,0 +1,4 @@
+## Append samples you want in your CSV to this file as resources ##
+resources:
+- aws_v1alpha1_gitagent.yaml
+#+kubebuilder:scaffold:manifestskustomizesamples

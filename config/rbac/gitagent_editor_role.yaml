@@ -1,0 +1,24 @@
+# permissions for end users to edit gitagents.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: gitagent-editor-role
+rules:
+- apiGroups:
+  - aws.gitops.com
+  resources:
+  - gitagents
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - aws.gitops.com
+  resources:
+  - gitagents/status
+  verbs:
+  - get
