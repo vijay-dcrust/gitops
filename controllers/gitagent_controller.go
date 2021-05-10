@@ -139,18 +139,51 @@ func (r *GitagentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		tagValues[i] = v
 		i++
 	}
-	istioElb, err := NewELB("ap-southeast-1")
-	if err != nil {
-		println("error calling  newelb")
+	awsConfig := &aws.Config{
+		Region: aws.String("ap-southeast-1"),
+		//Credentials: credentials.NewStaticCredentials(id, secret, ""),
+		Credentials: credentials.NewSharedCredentials("", "sgcentral"),
 	}
-	println("tag keys:", tagKeys[0])
-	println("tag values:", tagValues[0])
+	awsConfig = awsConfig.WithCredentialsChainVerboseErrors(true)
 
-	istioelbList, err := istioElb.GetLoadbalancersByTag(tagKeys[0], tagValues[0])
+	svc := elb.New(session.New(awsConfig))
+	input := &elb.DescribeLoadBalancersInput{}
+	result, err := svc.DescribeLoadBalancers(input)
 	if err != nil {
-		println("error calling  GetLoadbalancersByTag")
+		fmt.Println(err.Error())
 	}
-	println("Elb list: ", istioelbList)
+
+	lb_output := result.LoadBalancerDescriptions[0]
+	lb_name := *(lb_output.LoadBalancerName)
+
+	var list_of_lbname []*string
+	list_of_lbname = append(list_of_lbname, &lb_name)
+
+	input2 := &elb.DescribeTagsInput{
+		LoadBalancerNames: list_of_lbname,
+	}
+	lb_tags, _ := svc.DescribeTags(input2)
+	fmt.Println("lb_tags: ", *lb_tags.TagDescriptions[0].Tags[0].Key)
+
+	var matchFound bool
+	for _, rt := range lb_tags.TagDescriptions[0].Tags {
+		if *(rt.Key) == tagKeys[0] && *(rt.Value) == tagValues[0] {
+			print("key found")
+			matchFound = true
+			gitAgent.Status.AwsComponentName = "Matching found"
+			break
+		}
+	}
+	if !matchFound {
+		gitAgent.Status.AwsComponentName = "Matching Not found"
+	}
+	err = r.Status().Update(ctx, gitAgent)
+	if err != nil {
+		println(err, "Failed to update Memcached status")
+		return ctrl.Result{}, err
+	}
+
+	//fmt.Println("result: ", lb_dns_name.AvailabilityZones)
 	return ctrl.Result{Requeue: true}, nil
 }
 
