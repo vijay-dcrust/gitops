@@ -19,6 +19,7 @@ package controllers
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"os"
@@ -29,6 +30,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/elb"
+	"github.com/go-git/go-git/plumbing"
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
 
@@ -125,7 +127,7 @@ func MatchLBTags(tagKeys []string, tagValues []string) (lb_name string) {
 	return "Not found"
 }
 
-func OpenRepo(gitDir string, gitRepo string) {
+func OpenRepo(gitDir string, gitRepo string) (gr *git.Repository, pk *ssh.PublicKeys) {
 	var publicKey *ssh.PublicKeys
 	sshPath := os.Getenv("HOME") + "/.ssh/id_rsa"
 	sshKey, _ := ioutil.ReadFile(sshPath)
@@ -138,12 +140,12 @@ func OpenRepo(gitDir string, gitRepo string) {
 		log.Print("Not able to open any existing repo.")
 	}
 	if re == nil {
-		_, err := git.PlainClone(gitDir, false, &git.CloneOptions{
+		re, e = git.PlainClone(gitDir, false, &git.CloneOptions{
 			URL:      gitRepo,
 			Progress: os.Stdout,
 			Auth:     publicKey,
 		})
-		if err != nil {
+		if e != nil {
 			log.Print("Error. Failed to clone the repo")
 		}
 		log.Print("Cloned the repo")
@@ -167,10 +169,18 @@ func OpenRepo(gitDir string, gitRepo string) {
 			log.Fatal("Unable to Create the worktree from from repo!")
 		}
 	}
+	return re, publicKey
 }
 
-func GetValueFromSourceCode(gitDir string, gitFile string, keyVar string, separator string) (iv string) {
-	var itemValue string
+func UpdateSourceCode(gitDir string, gitFile string, keyVar string, separator string, lbName string) (iv bool) {
+	//var tmpOutputFile = "/tmp/gitops"
+	of, err := os.Create("/tmp/gitops")
+	defer of.Close()
+	if err != nil {
+		log.Println(err.Error(), "Error! Not able to open the tmp file")
+	}
+
+	var found = false
 	file, err := os.Open(gitDir + "/" + gitFile)
 	if err != nil {
 		log.Println(err.Error(), "Error! Not able to open the file")
@@ -182,15 +192,57 @@ func GetValueFromSourceCode(gitDir string, gitFile string, keyVar string, separa
 		line := scanner.Text()
 		matched, _ := regexp.MatchString("\\b"+keyVar+"\\b", line)
 		if matched {
+			found = true
 			lineValues := strings.Split(line, separator)
 			itemValue := lineValues[1]
 			itemValue = strings.TrimSpace(itemValue)
 			itemValue = strings.Trim(itemValue, "\"") //Trim the double quotes
 			itemValue = strings.Trim(itemValue, "'")  //Trim the single quotes
 			fmt.Println("Values in source code for given variable: ", lineValues[0], itemValue)
+			if itemValue != lbName {
+				log.Println("Mismatch in code vs config! Uptaing the Code.")
+			}
+			line = strings.Replace(line, itemValue, lbName, 1)
 		}
+		//fmt.Println(line)
+		of.WriteString(line + "\n")
 	}
-	return itemValue
+	return found
+}
+func CopyFile(gitDir string, gitFile string) {
+	var tmpOutputFile = "/tmp/gitops"
+	of, err := os.Open(tmpOutputFile)
+	defer of.Close()
+	if err != nil {
+		log.Println(err.Error(), "Error! Not able to open the tmpOutputFile")
+	}
+	file, err := os.Create(gitDir + "/" + gitFile)
+	if err != nil {
+		log.Println(err.Error(), "Error! Not able to open the file")
+	}
+	defer file.Close()
+	_, err = io.Copy(file, of)
+	if err != nil {
+		log.Fatal("Unable to copy the tmp file to :", gitFile, err.Error())
+	}
+	err = os.Remove(tmpOutputFile)
+	if err != nil {
+		log.Fatal("Unable to Delete the tmp file :", tmpOutputFile)
+	}
+}
+func CreatePR(gitDir string, repo *git.Repository, pk *ssh.PublicKeys) {
+	wt, err := repo.Worktree()
+	headRef, err := repo.Head()
+	ref := plumbing.NewHashReference("refs/heads/my-branch", headRef.Hash())
+
+	/*err = wt.Pull(&git.PullOptions{
+		RemoteName: "origin",
+		Auth:       pk,
+	})
+	*/
+	if err != nil {
+		log.Print("Not able to create a PR", err.Error())
+	}
 }
 
 // GitagentReconciler reconciles a Gitagent object
@@ -241,11 +293,11 @@ func (r *GitagentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	var gitFile = "providers/aws/sg/central/dns/private_zone/terraform.tfvars"
 	var keyVar = "dev-istio-controller-elb"
 	var separator = "="
-	OpenRepo(gitMountDir, gitRepo)
-	itemValue := GetValueFromSourceCode(gitMountDir, gitFile, keyVar, separator)
-
-	if itemValue != lbName {
-		log.Info("Mismatch in code vs config!")
+	repo, pk := OpenRepo(gitMountDir, gitRepo)
+	changed := UpdateSourceCode(gitMountDir, gitFile, keyVar, separator, lbName)
+	if changed {
+		CopyFile(gitMountDir, gitFile)
+		CreatePR(gitMountDir, repo, pk)
 	}
 
 	return ctrl.Result{Requeue: true}, nil

@@ -6,6 +6,4 @@ spec:
   # Add fields here
   aws-service: "lb"
   tags: 
-    kubernetes.io/service-name: "istio-system/istio-ingressgateway"
-    kubernetes.io/cluster/stg-eks-cluster-01: "owned"
-    env: "dev"
+    kubernetes.io/service-name: "sentry-app/t6"
