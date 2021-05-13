@@ -17,12 +17,20 @@ limitations under the License.
 package controllers
 
 import (
+	"bufio"
+	"fmt"
+	"io/ioutil"
 	"log"
+	"os"
+	"regexp"
+	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/elb"
+	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
 
 	"github.com/go-logr/logr"
 
@@ -63,7 +71,7 @@ func GetAuth(region string) *aws.Config {
 	awsConfig = awsConfig.WithCredentialsChainVerboseErrors(true)
 	return awsConfig
 }
-func GetLBNameList() (service *elb.ELB, lbname []string) {
+func GetLBNameList() (service *elb.ELB, lbname []string, dnsList []string) {
 	awsConfig := GetAuth("ap-southeast-1")
 	svc := elb.New(session.New(awsConfig))
 	input := &elb.DescribeLoadBalancersInput{}
@@ -71,30 +79,35 @@ func GetLBNameList() (service *elb.ELB, lbname []string) {
 	if err != nil {
 		log.Fatalf(err.Error())
 	}
-	var lb_list []string
+	var lbList []string
+	var lbDnsList []string
 	for _, ln := range result.LoadBalancerDescriptions {
-		lb_list = append(lb_list, *(ln.LoadBalancerName))
+		lbList = append(lbList, *(ln.LoadBalancerName))
+		lbDnsList = append(lbDnsList, *(ln.DNSName))
 	}
 	log.Println("Total Number of load balancers: ", len(result.LoadBalancerDescriptions))
-	log.Println("Name of load balancers: ", lb_list)
-	return svc, lb_list
+	log.Println("Name of load balancers: ", lbList)
+	return svc, lbList, lbDnsList
 
 }
 
 func MatchLBTags(tagKeys []string, tagValues []string) (lb_name string) {
-	svc, lb_list := GetLBNameList()
-	var list_of_lbname []*string
+	svc, lbList, dnsList := GetLBNameList()
+	var listLBName []*string
+	var dnsName string
 	isFound := false
-	for _, lb_name := range lb_list {
-		list_of_lbname = append(list_of_lbname, &lb_name)
-
+	j := 0
+	for _, lbName := range lbList {
+		listLBName = append(listLBName, &lbName)
+		dnsName = dnsList[j]
 		input := &elb.DescribeTagsInput{
-			LoadBalancerNames: list_of_lbname,
+			LoadBalancerNames: listLBName,
 		}
 		lb_tags, _ := svc.DescribeTags(input)
-		log.Println("Number of tags on load balancer: ", lb_name, len(lb_tags.TagDescriptions[0].Tags))
+		log.Println("Number of tags on load balancer: ", lbName, len(lb_tags.TagDescriptions[0].Tags))
 
 		for i := 0; i < len(tagKeys); i++ {
+
 			for _, rt := range lb_tags.TagDescriptions[0].Tags {
 				if *(rt.Key) == tagKeys[i] && *(rt.Value) == tagValues[i] {
 					isFound = true
@@ -105,10 +118,79 @@ func MatchLBTags(tagKeys []string, tagValues []string) (lb_name string) {
 			}
 		}
 		if isFound {
-			return lb_name
+			return dnsName
 		}
+		j++
 	}
 	return "Not found"
+}
+
+func OpenRepo(gitDir string, gitRepo string) {
+	var publicKey *ssh.PublicKeys
+	sshPath := os.Getenv("HOME") + "/.ssh/id_rsa"
+	sshKey, _ := ioutil.ReadFile(sshPath)
+	publicKey, keyError := ssh.NewPublicKeys("git", []byte(sshKey), "")
+	if keyError != nil {
+		fmt.Println(keyError)
+	}
+	re, e := git.PlainOpen(gitDir)
+	if e != nil {
+		log.Print("Not able to open any existing repo.")
+	}
+	if re == nil {
+		_, err := git.PlainClone(gitDir, false, &git.CloneOptions{
+			URL:      gitRepo,
+			Progress: os.Stdout,
+			Auth:     publicKey,
+		})
+		if err != nil {
+			log.Print("Error. Failed to clone the repo")
+		}
+		log.Print("Cloned the repo")
+		//fmt.Println(repo.Config())
+	} else {
+		log.Print("Repo is existing already, Refreshing it.")
+		wt, err := re.Worktree()
+		if err == nil {
+			err = wt.Pull(&git.PullOptions{
+				RemoteName: "origin",
+				Auth:       publicKey,
+			})
+			if err == nil {
+				log.Println("Git repo pull is successful.")
+			} else if err.Error() == "already up-to-date" {
+				log.Print("Git repo is upto date: ", err.Error())
+			} else {
+				log.Fatal("Unable to refresh the repo from remote!", err.Error())
+			}
+		} else {
+			log.Fatal("Unable to Create the worktree from from repo!")
+		}
+	}
+}
+
+func GetValueFromSourceCode(gitDir string, gitFile string, keyVar string, separator string) (iv string) {
+	var itemValue string
+	file, err := os.Open(gitDir + "/" + gitFile)
+	if err != nil {
+		log.Println(err.Error(), "Error! Not able to open the file")
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		matched, _ := regexp.MatchString("\\b"+keyVar+"\\b", line)
+		if matched {
+			lineValues := strings.Split(line, separator)
+			itemValue := lineValues[1]
+			itemValue = strings.TrimSpace(itemValue)
+			itemValue = strings.Trim(itemValue, "\"") //Trim the double quotes
+			itemValue = strings.Trim(itemValue, "'")  //Trim the single quotes
+			fmt.Println("Values in source code for given variable: ", lineValues[0], itemValue)
+		}
+	}
+	return itemValue
 }
 
 // GitagentReconciler reconciles a Gitagent object
@@ -147,10 +229,23 @@ func (r *GitagentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	lbName := MatchLBTags(tagKeys, tagValues)
 
 	gitAgent.Status.AwsComponentName = lbName
+
 	err = r.Status().Update(ctx, gitAgent)
 	if err != nil {
 		log.Error(err, "Failed to update GitAgent status")
 		return ctrl.Result{}, err
+	}
+
+	var gitMountDir = "/tmp/sgbank-terraformer"
+	var gitRepo = "git@gitlab.myteksi.net:dakota/sgbank-terraform.git"
+	var gitFile = "providers/aws/sg/central/dns/private_zone/terraform.tfvars"
+	var keyVar = "dev-istio-controller-elb"
+	var separator = "="
+	OpenRepo(gitMountDir, gitRepo)
+	itemValue := GetValueFromSourceCode(gitMountDir, gitFile, keyVar, separator)
+
+	if itemValue != lbName {
+		log.Info("Mismatch in code vs config!")
 	}
 
 	return ctrl.Result{Requeue: true}, nil
