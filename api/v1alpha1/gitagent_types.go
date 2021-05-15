@@ -31,6 +31,7 @@ type GitagentSpec struct {
 	// Foo is an example field of Gitagent. Edit gitagent_types.go to remove/update
 	AWSService  string            `json:"aws-service,omitempty"`
 	ServiceTags map[string]string `json:"tags,omitempty"`
+	GitInfo     map[string]string `json:"git,omitempty"`
 }
 
 // GitagentStatus defines the observed state of Gitagent

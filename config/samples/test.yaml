@@ -1,14 +1,15 @@
 apiVersion: aws.gitops.com/v1alpha1
 kind: Gitagent
 metadata:
-  name: gitagent-sample
+  name: gitagent-test
 spec:
   # Add fields here
   aws-service: "lb"
   tags: 
-    kubernetes.io/service-name: "dakota-app/nginx-ingress-nginx-ingress"
+    kubernetes.io/service-name: "sentry-app/t6"
   git:
     url: "git@gitlab.myteksi.net:dakota/sgbank-terraform.git"  
     file: "providers/aws/sg/central/dns/private_zone/terraform.tfvars"
-    keyvar: "dev-istio-controller-elb"
+    keyvar: "datadev-istio-controller-elb"
     fs: "="
+

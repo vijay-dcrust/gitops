@@ -40,6 +40,10 @@ spec:
                 description: Foo is an example field of Gitagent. Edit gitagent_types.go
                   to remove/update
                 type: string
+              git:
+                additionalProperties:
+                  type: string
+                type: object
               tags:
                 additionalProperties:
                   type: string

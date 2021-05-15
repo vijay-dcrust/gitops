@@ -347,10 +347,10 @@ func (r *GitagentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	var gitMountDir = "/tmp/sgbank-terraformer"
-	var gitRepo = "git@gitlab.myteksi.net:dakota/sgbank-terraform.git"
-	var gitFile = "providers/aws/sg/central/dns/private_zone/terraform.tfvars"
-	var keyVar = "dev-istio-controller-elb"
-	var separator = "="
+	var gitRepo = gitAgent.Spec.GitInfo["url"]
+	var gitFile = gitAgent.Spec.GitInfo["file"]
+	var keyVar = gitAgent.Spec.GitInfo["keyvar"]
+	var separator = gitAgent.Spec.GitInfo["fs"]
 
 	repo := OpenRepo(gitMountDir, gitRepo)
 	changed := UpdateSourceCode(gitMountDir, gitFile, keyVar, separator, lbName)
