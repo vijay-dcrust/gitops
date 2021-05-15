@@ -30,7 +30,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/elb"
-	"github.com/go-git/go-git/plumbing"
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
 
@@ -230,20 +229,43 @@ func CopyFile(gitDir string, gitFile string) {
 		log.Fatal("Unable to Delete the tmp file :", tmpOutputFile)
 	}
 }
+
+/*
 func CreatePR(gitDir string, repo *git.Repository, pk *ssh.PublicKeys) {
-	wt, err := repo.Worktree()
 	headRef, err := repo.Head()
 	ref := plumbing.NewHashReference("refs/heads/my-branch", headRef.Hash())
 
-	/*err = wt.Pull(&git.PullOptions{
+	err = repo.Storer.SetReference(ref)
+	wt, err := repo.Worktree()
+	err = wt.Checkout(&git.CheckoutOptions{
+		Hash: plumbing.NewHash(commit),
+	})
+
+	_, err = wt.Add(gitDir + "/")
+
+	commit, err := wt.Commit("example go-git commit", &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  "Vijay Pal",
+			Email: "vijay@db.org",
+			When:  time.Now(),
+		},
+	})
+	obj, err := repo.CommitObject(commit)
+	fmt.Println(obj)
+	err = repo.Push(&git.PushOptions{
+		Progress: os.Stdout,
+		Auth:     pk,
+	})
+	err = wt.Pull(&git.PullOptions{
 		RemoteName: "origin",
 		Auth:       pk,
 	})
-	*/
+
 	if err != nil {
 		log.Print("Not able to create a PR", err.Error())
 	}
 }
+*/
 
 // GitagentReconciler reconciles a Gitagent object
 type GitagentReconciler struct {
@@ -293,11 +315,11 @@ func (r *GitagentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	var gitFile = "providers/aws/sg/central/dns/private_zone/terraform.tfvars"
 	var keyVar = "dev-istio-controller-elb"
 	var separator = "="
-	repo, pk := OpenRepo(gitMountDir, gitRepo)
+	_, _ = OpenRepo(gitMountDir, gitRepo)
 	changed := UpdateSourceCode(gitMountDir, gitFile, keyVar, separator, lbName)
 	if changed {
 		CopyFile(gitMountDir, gitFile)
-		CreatePR(gitMountDir, repo, pk)
+		//CreatePR(gitMountDir, repo, pk)
 	}
 
 	return ctrl.Result{Requeue: true}, nil
