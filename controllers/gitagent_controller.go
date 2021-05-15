@@ -34,6 +34,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/elb"
 	"github.com/go-logr/logr"
 	git "gopkg.in/src-d/go-git.v4"
+	"gopkg.in/src-d/go-git.v4/config"
 	"gopkg.in/src-d/go-git.v4/plumbing"
 	"gopkg.in/src-d/go-git.v4/plumbing/object"
 	"gopkg.in/src-d/go-git.v4/plumbing/transport/ssh"
@@ -99,7 +100,7 @@ func MatchLBTags(tagKeys []string, tagValues []string) (lb_name string) {
 	svc, lbList, dnsList := GetLBNameList()
 	var listLBName []*string
 	var dnsName string
-	isFound := false
+	isFound := true
 	j := 0
 	for _, lbName := range lbList {
 		listLBName = append(listLBName, &lbName)
@@ -111,7 +112,9 @@ func MatchLBTags(tagKeys []string, tagValues []string) (lb_name string) {
 		log.Println("Number of tags on load balancer: ", lbName, len(lb_tags.TagDescriptions[0].Tags))
 
 		for i := 0; i < len(tagKeys); i++ {
-
+			if !isFound {
+				break
+			}
 			for _, rt := range lb_tags.TagDescriptions[0].Tags {
 				if *(rt.Key) == tagKeys[i] && *(rt.Value) == tagValues[i] {
 					isFound = true
@@ -121,10 +124,12 @@ func MatchLBTags(tagKeys []string, tagValues []string) (lb_name string) {
 				}
 			}
 		}
+
 		if isFound {
 			return dnsName
 		}
 		j++
+
 	}
 	return "Not found"
 }
@@ -146,9 +151,10 @@ func OpenRepo(gitDir string, gitRepo string) (gr *git.Repository) {
 	}
 	if re == nil {
 		re, e = git.PlainClone(gitDir, false, &git.CloneOptions{
-			URL:      gitRepo,
-			Progress: os.Stdout,
-			Auth:     publicKey,
+			URL:        gitRepo,
+			Progress:   os.Stdout,
+			Auth:       publicKey,
+			RemoteName: "master",
 		})
 		if e != nil {
 			log.Fatal("Error. Failed to clone the repo", e.Error())
@@ -181,7 +187,7 @@ func OpenRepo(gitDir string, gitRepo string) (gr *git.Repository) {
 
 func UpdateSourceCode(gitDir string, gitFile string, keyVar string, separator string, lbName string) (iv bool) {
 	//var tmpOutputFile = "/tmp/gitops"
-	of, err := os.Create("/tmp/gitops")
+	of, err := os.Create("/tmp/gitops" + keyVar)
 	defer of.Close()
 	if err != nil {
 		log.Println(err.Error(), "Error! Not able to open the tmp file")
@@ -216,8 +222,8 @@ func UpdateSourceCode(gitDir string, gitFile string, keyVar string, separator st
 	}
 	return changed
 }
-func CopyFile(gitDir string, gitFile string) {
-	var tmpOutputFile = "/tmp/gitops"
+func CopyFile(gitDir string, gitFile string, keyVar string) {
+	var tmpOutputFile = "/tmp/gitops" + keyVar
 	of, err := os.Open(tmpOutputFile)
 	defer of.Close()
 	if err != nil {
@@ -238,7 +244,7 @@ func CopyFile(gitDir string, gitFile string) {
 	}
 }
 
-func CreateBranch(gitDir string, repo *git.Repository) {
+func CreateBranch(gitDir string, repo *git.Repository) (br string) {
 	branch := fmt.Sprintf("refs/heads/gitops-operator-branch-%s", strconv.FormatInt(time.Now().UnixNano(), 15))
 
 	//_ = plumbing.ReferenceName("refs/heads/my-branch")
@@ -257,8 +263,9 @@ func CreateBranch(gitDir string, repo *git.Repository) {
 			log.Println("New Branch created successfully: ", branch)
 		}
 	}
+	return branch
 }
-func CreatePR(gitDir string, repo *git.Repository) (isPR bool) {
+func CreatePR(gitDir string, repo *git.Repository, refSpec string) (isPR bool) {
 	pk := getAccessKey()
 	wt, err := repo.Worktree()
 	_, err = wt.Add(".")
@@ -277,9 +284,10 @@ func CreatePR(gitDir string, repo *git.Repository) (isPR bool) {
 	} else {
 		log.Println("Success! commit done on the branch.")
 	}
-
+	rs := config.RefSpec("refs/heads/*:refs/heads/*")
 	err = repo.Push(&git.PushOptions{
 		RemoteName: "origin",
+		RefSpecs:   []config.RefSpec{rs},
 		Auth:       pk,
 		Progress:   os.Stdout,
 	})
@@ -298,10 +306,6 @@ func CreatePR(gitDir string, repo *git.Repository) (isPR bool) {
 	return false
 
 }
-
-var (
-	isPRCreated bool
-)
 
 // GitagentReconciler reconciles a Gitagent object
 type GitagentReconciler struct {
@@ -338,6 +342,32 @@ func (r *GitagentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	lbName := MatchLBTags(tagKeys, tagValues)
 
+	var gitMountDir = "/tmp/sgbank-terraformer"
+	var gitRepo = gitAgent.Spec.GitInfo["url"]
+	var gitFile = gitAgent.Spec.GitInfo["file"]
+	var keyVar = gitAgent.Spec.GitInfo["keyvar"]
+	var separator = gitAgent.Spec.GitInfo["fs"]
+	codeConfigStatus := gitAgent.Status.CodeConfigStatus
+
+	repo := OpenRepo(gitMountDir, gitRepo)
+	changed := UpdateSourceCode(gitMountDir, gitFile, keyVar, separator, lbName)
+
+	fmt.Println("isPRCreated: ", codeConfigStatus)
+	fmt.Println("changed: ", changed)
+
+	if changed && codeConfigStatus != "PR Created" {
+		refSpec := CreateBranch(gitMountDir, repo)
+		CopyFile(gitMountDir, gitFile, keyVar)
+		_ = CreatePR(gitMountDir, repo, refSpec)
+		gitAgent.Status.CodeConfigStatus = "PR Created"
+
+	} else if changed && codeConfigStatus == "PR Created" {
+		log.Info("Alert! PR has been created already. Please merge the changes.")
+		//gitAgent.Status.CodeConfigStatus = "PR Created"
+	} else if !changed {
+		log.Info("Code and Config is in sync. No change required.")
+		gitAgent.Status.CodeConfigStatus = "In Sync"
+	}
 	gitAgent.Status.AwsComponentName = lbName
 
 	err = r.Status().Update(ctx, gitAgent)
@@ -346,38 +376,13 @@ func (r *GitagentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 
-	var gitMountDir = "/tmp/sgbank-terraformer"
-	var gitRepo = gitAgent.Spec.GitInfo["url"]
-	var gitFile = gitAgent.Spec.GitInfo["file"]
-	var keyVar = gitAgent.Spec.GitInfo["keyvar"]
-	var separator = gitAgent.Spec.GitInfo["fs"]
-
-	repo := OpenRepo(gitMountDir, gitRepo)
-	changed := UpdateSourceCode(gitMountDir, gitFile, keyVar, separator, lbName)
-
-	fmt.Println("isPRCreated: ", isPRCreated)
-	fmt.Println("changed: ", changed)
-
-	if changed && !isPRCreated {
-		CreateBranch(gitMountDir, repo)
-		CopyFile(gitMountDir, gitFile)
-		isPRCreated = CreatePR(gitMountDir, repo)
-
-		fmt.Println("isPRCreated1: ", isPRCreated)
-		fmt.Println("changed1: ", changed)
-
-	} else if changed && isPRCreated {
-		log.Info("Alert! PR has been created already. Please merge the changes.")
-	} else if !changed {
-		log.Info("Code and Config is in sync. No change required.")
-	}
-	return ctrl.Result{Requeue: true}, nil
+	return ctrl.Result{RequeueAfter: time.Second * 60, Requeue: true}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *GitagentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&awsv1alpha1.Gitagent{}).
-		WithOptions(controller.Options{MaxConcurrentReconciles: 2}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
 		Complete(r)
 }

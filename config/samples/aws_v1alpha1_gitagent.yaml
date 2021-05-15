@@ -1,12 +1,14 @@
 apiVersion: aws.gitops.com/v1alpha1
 kind: Gitagent
 metadata:
-  name: gitagent-sample
+  name: gitagent-sample 
 spec:
   # Add fields here
   aws-service: "lb"
   tags: 
-    kubernetes.io/service-name: "dakota-app/nginx-ingress-nginx-ingress"
+    jira : "DAKOTA-1677"
+    kubernetes.io/service-name: "istio-system/istio-ingressgateway"
+    env : "dev"
   git:
     url: "git@gitlab.myteksi.net:dakota/sgbank-terraform.git"  
     file: "providers/aws/sg/central/dns/private_zone/terraform.tfvars"
