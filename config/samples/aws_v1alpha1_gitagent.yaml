@@ -6,4 +6,4 @@ spec:
   # Add fields here
   aws-service: "lb"
   tags: 
-    kubernetes.io/service-name: "sentry-app/t6"
+    jira: "DAKOTA-1677"

@@ -24,16 +24,19 @@ import (
 	"log"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/elb"
-	git "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
-
 	"github.com/go-logr/logr"
+	git "gopkg.in/src-d/go-git.v4"
+	"gopkg.in/src-d/go-git.v4/plumbing"
+	"gopkg.in/src-d/go-git.v4/plumbing/object"
+	"gopkg.in/src-d/go-git.v4/plumbing/transport/ssh"
 
 	"context"
 
@@ -125,8 +128,7 @@ func MatchLBTags(tagKeys []string, tagValues []string) (lb_name string) {
 	}
 	return "Not found"
 }
-
-func OpenRepo(gitDir string, gitRepo string) (gr *git.Repository, pk *ssh.PublicKeys) {
+func getAccessKey() (pk *ssh.PublicKeys) {
 	var publicKey *ssh.PublicKeys
 	sshPath := os.Getenv("HOME") + "/.ssh/id_rsa"
 	sshKey, _ := ioutil.ReadFile(sshPath)
@@ -134,6 +136,10 @@ func OpenRepo(gitDir string, gitRepo string) (gr *git.Repository, pk *ssh.Public
 	if keyError != nil {
 		fmt.Println(keyError)
 	}
+	return publicKey
+}
+func OpenRepo(gitDir string, gitRepo string) (gr *git.Repository) {
+	publicKey := getAccessKey()
 	re, e := git.PlainOpen(gitDir)
 	if e != nil {
 		log.Print("Not able to open any existing repo.")
@@ -145,22 +151,24 @@ func OpenRepo(gitDir string, gitRepo string) (gr *git.Repository, pk *ssh.Public
 			Auth:     publicKey,
 		})
 		if e != nil {
-			log.Print("Error. Failed to clone the repo")
+			log.Fatal("Error. Failed to clone the repo", e.Error())
+		} else {
+			log.Println("Cloned the repo")
 		}
-		log.Print("Cloned the repo")
 		//fmt.Println(repo.Config())
 	} else {
-		log.Print("Repo is existing already, Refreshing it.")
+		log.Println("Repo is existing already, Refreshing it.")
 		wt, err := re.Worktree()
 		if err == nil {
 			err = wt.Pull(&git.PullOptions{
 				RemoteName: "origin",
+				Progress:   os.Stdout,
 				Auth:       publicKey,
 			})
 			if err == nil {
 				log.Println("Git repo pull is successful.")
 			} else if err.Error() == "already up-to-date" {
-				log.Print("Git repo is upto date: ", err.Error())
+				log.Println("Git repo is upto date: ", err.Error())
 			} else {
 				log.Fatal("Unable to refresh the repo from remote!", err.Error())
 			}
@@ -168,7 +176,7 @@ func OpenRepo(gitDir string, gitRepo string) (gr *git.Repository, pk *ssh.Public
 			log.Fatal("Unable to Create the worktree from from repo!")
 		}
 	}
-	return re, publicKey
+	return re
 }
 
 func UpdateSourceCode(gitDir string, gitFile string, keyVar string, separator string, lbName string) (iv bool) {
@@ -179,7 +187,7 @@ func UpdateSourceCode(gitDir string, gitFile string, keyVar string, separator st
 		log.Println(err.Error(), "Error! Not able to open the tmp file")
 	}
 
-	var found = false
+	var changed bool
 	file, err := os.Open(gitDir + "/" + gitFile)
 	if err != nil {
 		log.Println(err.Error(), "Error! Not able to open the file")
@@ -191,14 +199,14 @@ func UpdateSourceCode(gitDir string, gitFile string, keyVar string, separator st
 		line := scanner.Text()
 		matched, _ := regexp.MatchString("\\b"+keyVar+"\\b", line)
 		if matched {
-			found = true
 			lineValues := strings.Split(line, separator)
 			itemValue := lineValues[1]
 			itemValue = strings.TrimSpace(itemValue)
 			itemValue = strings.Trim(itemValue, "\"") //Trim the double quotes
 			itemValue = strings.Trim(itemValue, "'")  //Trim the single quotes
-			fmt.Println("Values in source code for given variable: ", lineValues[0], itemValue)
+			log.Println("Values in source code for given variable: ", lineValues[0], itemValue)
 			if itemValue != lbName {
+				changed = true
 				log.Println("Mismatch in code vs config! Uptaing the Code.")
 			}
 			line = strings.Replace(line, itemValue, lbName, 1)
@@ -206,7 +214,7 @@ func UpdateSourceCode(gitDir string, gitFile string, keyVar string, separator st
 		//fmt.Println(line)
 		of.WriteString(line + "\n")
 	}
-	return found
+	return changed
 }
 func CopyFile(gitDir string, gitFile string) {
 	var tmpOutputFile = "/tmp/gitops"
@@ -230,42 +238,70 @@ func CopyFile(gitDir string, gitFile string) {
 	}
 }
 
-/*
-func CreatePR(gitDir string, repo *git.Repository, pk *ssh.PublicKeys) {
-	headRef, err := repo.Head()
-	ref := plumbing.NewHashReference("refs/heads/my-branch", headRef.Hash())
+func CreateBranch(gitDir string, repo *git.Repository) {
+	branch := fmt.Sprintf("refs/heads/gitops-operator-branch-%s", strconv.FormatInt(time.Now().UnixNano(), 15))
 
-	err = repo.Storer.SetReference(ref)
+	//_ = plumbing.ReferenceName("refs/heads/my-branch")
+	b := plumbing.NewBranchReferenceName(branch)
 	wt, err := repo.Worktree()
-	err = wt.Checkout(&git.CheckoutOptions{
-		Hash: plumbing.NewHash(commit),
-	})
 
-	_, err = wt.Add(gitDir + "/")
+	err = wt.Checkout(&git.CheckoutOptions{Create: false, Force: false, Branch: b})
 
-	commit, err := wt.Commit("example go-git commit", &git.CommitOptions{
+	if err != nil {
+		// got an error  - try to create it
+		log.Println("Unable to checkout the branch: ", branch, err.Error())
+		err := wt.Checkout(&git.CheckoutOptions{Create: true, Force: false, Branch: b})
+		if err != nil {
+			log.Println("Unable to create the branch: ", branch, err.Error())
+		} else {
+			log.Println("New Branch created successfully: ", branch)
+		}
+	}
+}
+func CreatePR(gitDir string, repo *git.Repository) (isPR bool) {
+	pk := getAccessKey()
+	wt, err := repo.Worktree()
+	_, err = wt.Add(".")
+	if err != nil {
+		log.Fatal("Unable to add the file into index.", err.Error())
+	}
+	_, err = wt.Commit("digibank gitops operator", &git.CommitOptions{
 		Author: &object.Signature{
-			Name:  "Vijay Pal",
-			Email: "vijay@db.org",
+			Name:  "Gitops operator",
+			Email: "gitops@digibank.org",
 			When:  time.Now(),
 		},
 	})
-	obj, err := repo.CommitObject(commit)
-	fmt.Println(obj)
+	if err != nil {
+		log.Fatal("Unable to commit on the git branch.", err.Error())
+	} else {
+		log.Println("Success! commit done on the branch.")
+	}
+
 	err = repo.Push(&git.PushOptions{
-		Progress: os.Stdout,
-		Auth:     pk,
-	})
-	err = wt.Pull(&git.PullOptions{
 		RemoteName: "origin",
 		Auth:       pk,
+		Progress:   os.Stdout,
 	})
-
 	if err != nil {
-		log.Print("Not able to create a PR", err.Error())
+		log.Fatal("Unable to Push the branch to remote.", err.Error())
+	} else {
+		log.Println("Success! Pushed the changes.")
 	}
+	err = wt.Checkout(&git.CheckoutOptions{Create: false, Force: false, Branch: "refs/heads/master"})
+	if err != nil {
+		log.Fatal("Unable to Check back the master branch out.", err.Error())
+	} else {
+		log.Println("Success! Checked out the master branch!")
+		return true
+	}
+	return false
+
 }
-*/
+
+var (
+	isPRCreated bool
+)
 
 // GitagentReconciler reconciles a Gitagent object
 type GitagentReconciler struct {
@@ -315,13 +351,26 @@ func (r *GitagentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	var gitFile = "providers/aws/sg/central/dns/private_zone/terraform.tfvars"
 	var keyVar = "dev-istio-controller-elb"
 	var separator = "="
-	_, _ = OpenRepo(gitMountDir, gitRepo)
-	changed := UpdateSourceCode(gitMountDir, gitFile, keyVar, separator, lbName)
-	if changed {
-		CopyFile(gitMountDir, gitFile)
-		//CreatePR(gitMountDir, repo, pk)
-	}
 
+	repo := OpenRepo(gitMountDir, gitRepo)
+	changed := UpdateSourceCode(gitMountDir, gitFile, keyVar, separator, lbName)
+
+	fmt.Println("isPRCreated: ", isPRCreated)
+	fmt.Println("changed: ", changed)
+
+	if changed && !isPRCreated {
+		CreateBranch(gitMountDir, repo)
+		CopyFile(gitMountDir, gitFile)
+		isPRCreated = CreatePR(gitMountDir, repo)
+
+		fmt.Println("isPRCreated1: ", isPRCreated)
+		fmt.Println("changed1: ", changed)
+
+	} else if changed && isPRCreated {
+		log.Info("Alert! PR has been created already. Please merge the changes.")
+	} else if !changed {
+		log.Info("Code and Config is in sync. No change required.")
+	}
 	return ctrl.Result{Requeue: true}, nil
 }
 
