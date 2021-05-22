@@ -112,20 +112,15 @@ func MatchLBTags(tagKeys []string, tagValues []string) (lb_name string) {
 		log.Println("Number of tags on load balancer: ", lbName, len(lb_tags.TagDescriptions[0].Tags))
 
 		for i := 0; i < len(tagKeys); i++ {
-			log.Println("Search tag on load balancer:", dnsName, ":", tagKeys[i], ":", tagValues[i])
 			if !isFound {
 				break
 			}
 			for _, rt := range lb_tags.TagDescriptions[0].Tags {
 				if *(rt.Key) == tagKeys[i] && *(rt.Value) == tagValues[i] {
-					log.Println("Found tag on load balancer:", dnsName, ":", *(rt.Key), ":", *(rt.Value))
-
 					isFound = true
 					break
 				} else {
 					isFound = false
-					log.Println("Not Found tag on load balancer:", dnsName, ":", *(rt.Key), ":", *(rt.Value))
-
 				}
 			}
 		}
@@ -357,8 +352,8 @@ func (r *GitagentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	repo := OpenRepo(gitMountDir, gitRepo)
 	changed := UpdateSourceCode(gitMountDir, gitFile, keyVar, separator, lbName)
 
-	fmt.Println("isPRCreated: ", codeConfigStatus)
-	fmt.Println("changed: ", changed)
+	//fmt.Println("isPRCreated: ", codeConfigStatus)
+	//fmt.Println("changed: ", changed)
 
 	if changed && codeConfigStatus != "PR Created" {
 		refSpec := CreateBranch(gitMountDir, repo)
