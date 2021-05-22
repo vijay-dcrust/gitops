@@ -6,7 +6,7 @@ spec:
   # Add fields here
   aws-service: "lb"
   tags: 
-    kubernetes.io/service-name: "sentry-app/t6"
+    kubernetes.io/service-name: "dakota-app/nginx-ingress-nginx-ingress"
   git:
     url: "git@gitlab.myteksi.net:dakota/sgbank-terraform.git"  
     file: "providers/aws/sg/central/dns/private_zone/terraform.tfvars"

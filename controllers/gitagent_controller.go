@@ -100,9 +100,9 @@ func MatchLBTags(tagKeys []string, tagValues []string) (lb_name string) {
 	svc, lbList, dnsList := GetLBNameList()
 	var listLBName []*string
 	var dnsName string
-	isFound := true
 	j := 0
 	for _, lbName := range lbList {
+		isFound := true
 		listLBName = append(listLBName, &lbName)
 		dnsName = dnsList[j]
 		input := &elb.DescribeTagsInput{
@@ -112,15 +112,20 @@ func MatchLBTags(tagKeys []string, tagValues []string) (lb_name string) {
 		log.Println("Number of tags on load balancer: ", lbName, len(lb_tags.TagDescriptions[0].Tags))
 
 		for i := 0; i < len(tagKeys); i++ {
+			log.Println("Search tag on load balancer:", dnsName, ":", tagKeys[i], ":", tagValues[i])
 			if !isFound {
 				break
 			}
 			for _, rt := range lb_tags.TagDescriptions[0].Tags {
 				if *(rt.Key) == tagKeys[i] && *(rt.Value) == tagValues[i] {
+					log.Println("Found tag on load balancer:", dnsName, ":", *(rt.Key), ":", *(rt.Value))
+
 					isFound = true
 					break
 				} else {
 					isFound = false
+					log.Println("Not Found tag on load balancer:", dnsName, ":", *(rt.Key), ":", *(rt.Value))
+
 				}
 			}
 		}
@@ -167,7 +172,7 @@ func OpenRepo(gitDir string, gitRepo string) (gr *git.Repository) {
 		wt, err := re.Worktree()
 		if err == nil {
 			err = wt.Pull(&git.PullOptions{
-				RemoteName: "origin",
+				RemoteName: "master",
 				Progress:   os.Stdout,
 				Auth:       publicKey,
 			})
@@ -286,7 +291,7 @@ func CreatePR(gitDir string, repo *git.Repository, refSpec string) (isPR bool) {
 	}
 	rs := config.RefSpec("refs/heads/*:refs/heads/*")
 	err = repo.Push(&git.PushOptions{
-		RemoteName: "origin",
+		RemoteName: "master",
 		RefSpecs:   []config.RefSpec{rs},
 		Auth:       pk,
 		Progress:   os.Stdout,
